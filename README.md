@@ -149,6 +149,44 @@ model_name="FreedomIntelligence/HuatuoGPT-o1-8B" # Path to the model you are dep
 port=28${log_num}35
 CUDA_VISIBLE_DEVICES=0  python -m sglang.launch_server --model-path $model_name --port $port --mem-fraction-static 0.8 --dp 1 --tp 1  > sglang${log_num}.log 2>&1 &
 ```
+```Plain Text
+1. `log_num=0`:
+   -  定义一个变量 `log_num` 并将其赋值为 0。这个变量将在后续的命令中使用，用于生成文件名和端口号，方便管理多个 sglang 服务实例。
+
+2. `model_name="FreedomIntelligence/HuatuoGPT-o1-8B"`:
+   -  定义一个变量 `model_name`，并将其赋值为 `"FreedomIntelligence/HuatuoGPT-o1-8B"`。这通常代表托管在 Hugging Face Hub 上的一个模型 ID 或本地模型的文件路径。`FreedomIntelligence/HuatuoGPT-o1-8B`  很可能是一个特定版本的或微调过的 LLM 名称。 sglang 会加载并使用这个指定的模型。
+
+3. `port=28${log_num}35`:
+   -  定义一个变量 `port`，并将其赋值为一个由字符串和变量组合成的数值。`${log_num}` 会被替换为 `log_num` 变量的值(0)，所以最终 `port` 的值为 `28035`。 这个端口号将用于 sglang 服务的监听，客户端可以通过这个端口与服务进行通信。使用变量可以让多个服务实例运行在不同的端口上，避免冲突。
+
+4. `CUDA_VISIBLE_DEVICES=0`:
+   -  这是一个环境变量设置。`CUDA_VISIBLE_DEVICES=0`  告诉 CUDA 只使用 GPU 设备 0。 如果系统有多个 GPU，这个设置可以控制 sglang 服务使用哪个 GPU。这对于多 GPU 服务器非常重要，可以进行资源分配和隔离。
+
+5. `python -m sglang.launch_server`:
+   -  调用 Python 解释器来执行 `sglang.launch_server` 模块。 `-m`  选项告诉 Python 将 `sglang.launch_server`  视为一个模块来运行。 `sglang.launch_server`  很可能是 sglang 库提供的用于启动服务的脚本。
+
+6. `--model-path $model_name`:
+   -  这是一个传递给 `sglang.launch_server`  的命令行参数。`--model-path`  指定了要加载的模型的路径或 ID。`${model_name}` 会被替换为之前定义的 `model_name`  变量的值。
+
+7. `--port $port`:
+   -  另一个传递给 `sglang.launch_server`  的命令行参数。`--port`  指定了服务监听的端口。`${port}` 会被替换为之前定义的 `port`  变量的值。
+
+8. `--mem-fraction-static 0.8`:
+   -  指定静态内存分配的比例。这告诉 sglang 服务预留 80% 的 GPU 内存，以供模型和相关操作使用。 静态分配可以提高性能，避免动态分配带来的开销。
+
+9. `--dp 1 --tp 1`:
+   - 这些参数控制数据并行（DP）和张量并行（TP）的设置。 `--dp 1`  和 `--tp 1`  都设置为 1 意味着禁用数据并行和张量并行。  当设置为1时，表示所有数据和张量都存储在一个设备上。 如果您有多个 GPU 并且想要加速推理过程，您可以增加这些值以启用并行处理。
+
+10. `> sglang${log_num}.log 2>&1 &`:
+    -  这一部分处理输出重定向和后台运行。
+    -  `>`  符号将标准输出 (stdout) 重定向到名为 `sglang${log_num}.log`  的文件。由于 `log_num` 为 0，文件名将是 `sglang0.log`。
+    -  `2>&1`  将标准错误 (stderr) 重定向到与标准输出相同的位置。这意味着错误信息也会被写入到 `sglang0.log`  文件中。
+    -  `&`  符号将整个命令放在后台运行。 这意味着该命令将在后台启动，而不会阻塞当前的终端会话。
+
+总而言之，这条命令启动了一个 sglang 服务，加载指定的 LLM (HuatuoGPT-o1-8B)，监听在端口 28035， 使用 GPU 0，设置静态内存分配，禁用并行处理，并将服务的输出和错误信息写入 `sglang0.log`  文件，并且在后台运行该服务。
+```
+
+
 2. Wait for the model to be deployed. After deployment, you can run the following code for evaluation. We use prompts that allow the model to respond freely. We find that the extracted results are consistently reliable and broadly cover the intended scope. You can also set the `--strict_prompt` option to use stricter prompts for more precise answer extraction.
 ```bash
 python evaluation/eval.py --model_name $model_name  --eval_file evaluation/data/eval_data.json --port $port 

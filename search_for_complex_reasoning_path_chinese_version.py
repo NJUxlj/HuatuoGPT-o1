@@ -19,8 +19,18 @@ import re
 import traceback
 import copy
 
+
+import yaml
+conf = yaml.safe_load(open(os.path.join("configs/llm.yaml"), "r"))
+model_name = "gpt-4.1"
+llm_conf = conf[model_name]
+llm_url = llm_conf["url"]
+authorization = llm_conf["authorization"]
+api_key = llm_conf["api_key"]
+
+
 class GPT:
-    def __init__(self, model_name, api_url, api_key):
+    def __init__(self, model_name=model_name, api_url=llm_url, api_key=api_key):
         self.model_name = model_name
         self.api_url = api_url
         self.api_key = api_key
@@ -309,7 +319,7 @@ def parse_gpt_response(response):
 
 def parse_gpt_response_reformat(response):
     try:
-        if '{' != response[0]:
+        if '{' != response[0]: # 输入检查 ：首先检查响应字符串是否以 { 开头，如果不是则调用 extract_bracket_content 提取JSON内容
             response = extract_bracket_content(response)
         da = json.loads(response.replace('\n',''))
 
@@ -373,7 +383,7 @@ def main():
     task_name = f'{os.path.split(args.data_path)[-1].replace(".json","")}_CoT_search'
     save_dir = f'output_data/{task_name}'
 
-    gpt_instance = GPT(model_name=args.model_name, api_url=args.api_url, api_key=args.api_key)
+    gpt_instance = GPT(model_name=model_name, api_url=llm_url, api_key=api_key)
 
 
     def verify_gpt(conclusion,answer,d):

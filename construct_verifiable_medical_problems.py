@@ -9,8 +9,16 @@ import traceback
 import re
 import requests
 
+import yaml
+conf = yaml.safe_load(open(os.path.join("configs/llm.yaml"), "r"))
+model_name = "gpt-4.1"
+llm_conf = conf[model_name]
+llm_url = llm_conf["url"]
+authorization = llm_conf["authorization"]
+api_key = llm_conf["api_key"]
+
 class GPT:
-    def __init__(self, model_name, api_url, api_key):
+    def __init__(self, model_name = model_name, api_url = llm_url, api_key = api_key):
         self.model_name = model_name
         self.api_url = api_url
         self.api_key = api_key
@@ -51,7 +59,7 @@ def parse_arguments():
 
 def extract_bracket_content(text):
     # Extract content between the first '{' and the last '}'
-    match = re.search(r'\{.*\}', text, re.DOTALL)
+    match = re.search(r'\{.*\}', text, re.DOTALL)   # 这个正则表达式 r'\{.*\}' 搜索出来的字符串 包括 前后的花括号。
     return match.group(0) if match else None
 
 def parse_gpt_response(response):
@@ -70,9 +78,12 @@ def parse_gpt_response(response):
         return False, None
 
 def process_single_item(item, gpt_instance, save_directory, filter_prompt, reformat_prompt, filter_enabled):
+    '''
+    save_directory: 之前已经筛选好的数据的路径
+    '''
     try:
         max_retries = 2
-        save_path = os.path.join(save_directory, f"{item['process_id']}.json")
+        save_path = os.path.join(save_directory, f"{item['process_id']}.json")   # 一个问答对，存储在一个单独的json文件中
 
         # Generate options string for the question
         item['options_str'] = '\n'.join([f"{key}. {value}" for key, value in item['options'].items()])
@@ -85,16 +96,16 @@ def process_single_item(item, gpt_instance, save_directory, filter_prompt, refor
             response = gpt_instance.retry_call(filter_query)
             item['gpt_filter_response'] = response
 
-            if 'pass' not in response.lower():
+            if 'pass' not in response.lower():   # 筛选不通过，但是依然把这个不通过的问题写入到json文件中
                 with open(save_path, 'w', encoding='utf-8') as file:
                     json.dump(item, file, ensure_ascii=False, indent=2)
                 return 1
 
         # Reformat questions into open-ended format
         reformat_query = reformat_prompt.format(question_text, item['answer'])
-        item['gpt_reformat_query'] = reformat_query
+        item['gpt_reformat_query'] = reformat_query 
 
-        for _ in range(max_retries):
+        for idx in range(max_retries):
             response = gpt_instance.retry_call(reformat_query)
             item['gpt_reformat_response'] = response
             valid, parsed_data = parse_gpt_response(response)
@@ -103,6 +114,8 @@ def process_single_item(item, gpt_instance, save_directory, filter_prompt, refor
                 item["Open-ended Verifiable Question"] = parsed_data["Open-ended Verifiable Question"]
                 item["Ground-True Answer"] = parsed_data["Ground-True Answer"]
                 break
+            else:
+                print(f"尝试次数={idx}/{max_retries}, 解析 gpt_reformat_response 相应数据失败")
 
         with open(save_path, 'w', encoding='utf-8') as file:
             json.dump(item, file, ensure_ascii=False, indent=2)
@@ -112,7 +125,14 @@ def process_single_item(item, gpt_instance, save_directory, filter_prompt, refor
     return 1
 
 def merge_saved_files(directory):
-    _, _, filenames = next(os.walk(directory))
+    '''
+    合并后的数据格式是一个包含多个JSON对象的列表，每个对象具有以下结构之一：
+
+        1. 包含 Open-ended Verifiable Question 和 Ground-True Answer 字段
+        2. 包含 gpt_filter_response 字段
+        3. 包含 gpt4_response_filter 字段
+    '''
+    _, _, filenames = next(os.walk(directory))  # 用于遍历指定的目录，返回一个生成器，包含 (root, dirs, files) 三元组
     json_files = [f for f in filenames if f.endswith('.json')]
     merged_data = []
 
@@ -148,11 +168,11 @@ def main():
     print(f"Loaded {len(input_data)} items.")
 
     # Define task and save directory
-    task_name = os.path.splitext(os.path.basename(args.data_path))[0]
+    task_name = os.path.splitext(os.path.basename(args.data_path))[0]  # 获取文件名，并去掉扩展名
     save_directory = os.path.join('output_data', task_name)
     os.makedirs(save_directory, exist_ok=True)
 
-    gpt_instance = GPT(model_name=args.model_name, api_url=args.api_url, api_key=args.api_key)
+    gpt_instance = GPT(model_name=model_name, api_url=url, api_key=api_key)
 
     filter_prompt = """<Multiple-choice Question>
 {}
@@ -190,10 +210,10 @@ Please output the result in the following JSON format:
 ```"""
 
     # Merge previously processed files
-    processed_data = merge_saved_files(save_directory)
+    processed_data = merge_saved_files(save_directory)    # 获取之前已经筛选好的数据
     print(f"Previously processed items: {len(processed_data)}")
 
-    input_data = deduplicate_data(input_data, processed_data)
+    input_data = deduplicate_data(input_data, processed_data)    # 在新的带筛选数据中，排除之前已经筛选过的数据
     print(f"Items remaining for processing: {len(input_data)}")
 
     # Process data using a thread pool
