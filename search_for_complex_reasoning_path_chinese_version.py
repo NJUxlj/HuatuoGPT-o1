@@ -333,6 +333,10 @@ def parse_gpt_response_reformat(response):
     
 
 def get_stream_of_search(longcot):
+    '''
+    将一个包含复杂推理路径(Chain of Thought, CoT)的列表转换为格式化的字符串输出。
+
+    '''
     temp = '### {}\n{}\n'
     resstr = []
     for x in longcot:
@@ -345,7 +349,7 @@ def get_stream_of_search(longcot):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", type=str, required=True, help="Path to the input JSON data file.")
-    parser.add_argument("--model_name", type=str, default="gpt-4", help="Name of the GPT model to use.")
+    parser.add_argument("--model_name", type=str, default="gpt-4.1", help="Name of the GPT model to use.")
     parser.add_argument("--api_key", type=str, required=True, help="OpenAI API key.")
     parser.add_argument("--api_url", type=str, default="https://api.openai.com/v1/chat/completions", help="OpenAI API URL.")
     parser.add_argument("--max_search_attempts", type=int, default=1, help="Maximum number of search attempts.")
@@ -387,8 +391,8 @@ def main():
 
 
     def verify_gpt(conclusion,answer,d):
-        query = verify_prompt.format(conclusion,answer)
-        response = gpt_instance.retry_call(query)
+        query = verify_prompt.format(conclusion,answer)  # 填充 verifier 验证器的 prompt
+        response = gpt_instance.retry_call(query)  # 返回 True or False
         d['gpt4_query_cot'].append(query)
         d['gpt4_response_cot'].append(response)
         if 'true' in response.lower():
@@ -423,8 +427,8 @@ def main():
                     d['gpt4_response_cot'].append(response)
                 flag, struct = parse_gpt_response(response)
                 if flag:
-                    d['response_struct'].append(struct["CoT"])
-                    d['Long_CoT'] =  struct["CoT"]
+                    d['response_struct'].append(struct["CoT"])  # 搜集整个搜索链上的CoT [e0, ..., ei]
+                    d['Long_CoT'] =  struct["CoT"]   # CoT 字段是一个列表， 里面包含了多个 step。 [inner_thinking, final_conclusion, verification]
                     d['response_type'].append('Init_CoT')
                     break
                 else:
@@ -432,9 +436,9 @@ def main():
             if not flag:
                 raise Exception('init error')
 
-            verify_gpt(d['Long_CoT'][-2]['content'],d['Ground-True Answer'],d)
+            verify_gpt(d['Long_CoT'][-2]['content'],d['Ground-True Answer'],d) # 将model输出的coinclusion和真实答案进行对比
 
-            for rethinking_try_time in range(args.max_search_attempts):
+            for rethinking_try_time in range(args.max_search_attempts): # 总共有3次尝试机会，每次尝试内有3次搜索机会
                 if rethinking_try_time > 0:
                     # Archive the failed state
                     del d['prior_fail_try']
@@ -446,15 +450,15 @@ def main():
                 save_d = copy.deepcopy(d)
 
                 # Begin search
-                for rethink_time in range(args.max_search_depth):
+                for rethink_time in range(args.max_search_depth): # 一共可有搜索3次
                     if d['verify'][-1]:
                         break
-                    reasoning = json.dumps(d['Long_CoT'][:-1],ensure_ascii=False,indent=2)
+                    reasoning = json.dumps(d['Long_CoT'][:-1],ensure_ascii=False,indent=2)  # 获取前 n-1条 <推理链，答案> 对: [(e0, y0),...,(e_{i-1}, y_{i-1})]
                     # Search strategy
-                    if rethink_time > 0:
+                    if rethink_time > 0:  # 如果是第二次 rethink
                         strategy_name,strategy = random.choice(search_strategies)
                     else:
-                        # exclude Backtracking
+                        # exclude Backtracking 【思维链的历史太短了，没办法回溯】
                         strategy_name,strategy = random.choice(search_strategies[1:])
 
                     query = strategy.format(d['Open-ended Verifiable Question'],reasoning)
@@ -467,16 +471,18 @@ def main():
                         if flag:
                             d['gpt4_response_cot'].append(response)
                             d['response_struct'].append(struct["CoT"])
-                            d['Long_CoT'] =  d['Long_CoT'][:-1] + struct["CoT"]
-                            d['response_type'].append(f'Re_CoT_{strategy_name}')
+                            d['Long_CoT'] =  d['Long_CoT'][:-1] + struct["CoT"]   # d['Long_CoT'][:-1] 指的是去除CoT列表中的最后一个 verification 步骤， 剩下[{"action":"Inner Thinking"},...,{"action":"Final Conclusion",...}]
+                            d['response_type'].append(f'Re_CoT_{strategy_name}')  # rethink cot strategy
                             break
                         else:
                             print(f'retrying strategy {strategy_name}',flush=True)
                     if not flag:
                         raise Exception('rethink error')
+                    
+                    # 每一轮rethink完了以后，都要verify
                     verify_gpt(d['Long_CoT'][-2]['content'],d['Ground-True Answer'],d)
                 
-                if d['verify'][-1]:
+                if d['verify'][-1]:  # 3 轮 rethink做完以后就要去 verify， 如果不通过，就进行下一次尝试
                     break
 
             # If it is still incorrect, generate a final Label_CoT round
@@ -490,7 +496,7 @@ def main():
                     if flag:
                         d['gpt4_response_cot'].append(response)
                         d['response_struct'].append(struct["CoT"])
-                        d['Long_CoT'] =  d['Long_CoT'][:-1] + struct["CoT"]
+                        d['Long_CoT'] =  d['Long_CoT'][:-1] + struct["CoT"] # 去除上一轮的verification， 加上新的CoT
                         d['response_type'].append('Label_CoT')
                         # ignore verify
                         d['verify'].append(True)
@@ -524,12 +530,12 @@ def main():
                 json.dump(d, fw, ensure_ascii=False,indent=2)
                 wrongtime = 0
 
-        except Exception as e:
+        except Exception as e:  # 如果在构建样本 d 的最终推理链的过程中出现异常， 对于每个样本 d，允许出现至多20次的构建失败。
             traceback.print_exc()
             wrongtime += 1
             if wrongtime > 20:
                 assert 1 == 0, 'wrong'
-        return 1
+        return 1   # 构建Final Complex CoT 成功
             
     def deduplicate_data(data, processed_data):
         processed_ids = {item['process_id'] for item in processed_data}
@@ -537,7 +543,11 @@ def main():
 
 
     def merge_saved_files(save_dir):
-        _, _, filenames = [i for i in os.walk(save_dir)][0]
+        '''
+         把所有包含复杂推理链的样本合并到一起 【每个json文件对应一个样本】
+
+        '''
+        _, _, filenames = [i for i in os.walk(save_dir)][0]    # 相当于 for _, _, filenames in os.walk(save_dir):
         json_files = [f for f in filenames if f.endswith('.json')]
         res = []
         for file_path in json_files:
