@@ -68,7 +68,11 @@ class Train_dataset(torch.utils.data.Dataset):
 
         labels = [-100]*len(query_ids) + input_ids[len(query_ids):]
         assert len(labels) == len(input_ids)
-        return {"input_ids": input_ids[-self.max_seq_len:], "labels": labels[-self.max_seq_len:]}        
+        # 截取最后max_seq_len长度的序列，因为:
+        # 1. 模型有最大序列长度限制，需要截断过长序列
+        # 2. 保留后面部分是因为这包含了response，即模型需要学习生成的部分
+        # 3. labels对应input_ids，所以也要同样截断
+        return {"input_ids": input_ids[-self.max_seq_len:], "labels": labels[-self.max_seq_len:]}
 
     def collate_fn(self, batch):
         data = [ self.get_prompt(da) for da in batch]
@@ -76,6 +80,8 @@ class Train_dataset(torch.utils.data.Dataset):
         labels = [item["labels"] for item in data]
         max_len = max(len(x) for x in input_ids)
         max_len = min(max_len,self.max_seq_len)
+
+        # 先截断，再补齐
         input_ids = [ item[:max_len] + [self.tokenizer.eos_token_id]*(max_len-len(item)) for item in input_ids]
         labels = [ item[:max_len] + [-100]*(max_len-len(item)) for item in labels]
         if self.debug < 3:
@@ -94,27 +100,58 @@ class Train_dataset(torch.utils.data.Dataset):
 class SFTMetric:
     def __init__(self, device):
         self.n_step = 0  
-        self.right = torch.Tensor([0]).to(device=device)
-        self.total = torch.Tensor([0]).to(device=device)
-        self.total_loss = torch.Tensor([0]).to(device=device)
+        self.right = torch.Tensor([0]).to(device=device)  # 各GPU上预测正确的token总数
+        self.total = torch.Tensor([0]).to(device=device)  # 各GPU上有效token（非padding）的总数
+        self.total_loss = torch.Tensor([0]).to(device=device) # 各GPU上的损失值总和
         self.world_size = dist.get_world_size()
 
     def __call__(self, logits, labels, loss):
         return self.update(logits, labels, loss)
 
     def update(self, logits, labels, loss):
+        '''
+        在一个 batch 上进行了各种指标的计算
+
+        技术原理：
+            输入输出错位：语言模型训练时，输入序列为[t0,t1,t2]，需要预测[t1,t2,t3]
+            [:-1]：截取输入序列的前n-1个token（作为模型看到的上下文）
+            [1:]：截取标签的后n-1个token（作为模型需要预测的目标）
+            具体示例： 原始输入: [BOS, "Hello", "world", EOS]
+            模型输入: [BOS, "Hello", "world"] (通过[:-1]获得)
+            模型预测：["Hello", "world", EOS]（.argmax(dim=-1)在词汇表维度取概率最大的token ID）
+            预测目标: ["Hello", "world", EOS] (通过[1:]获得)
+
+        实现效果：
+            确保模型在预测第i个token时，只能看到前i-1个token
+            符合语言模型的自回归生成特性
+            避免模型"偷看"当前要预测的token
+            
+            结合掩码机制：
+                -100标签会通过.masked_fill()被忽略
+                最终只计算有效token位置的损失和准确率
+        '''
         self.n_step += 1
-        with torch.no_grad():
-            shift_preds = logits[..., :-1, :].argmax(dim=-1)
-            shift_labels = labels[..., 1:]
-            self.right += (shift_preds == shift_labels).masked_fill(shift_labels.eq(-100), 0).sum().item()
+        with torch.no_grad():  # 禁用梯度计算
+            # len(labels) == len(input_ids) == len(preds)
+            # 序列偏移处理：通过[:-1]和[1:]实现输入-输出的错位对齐
+            shift_preds = logits[..., :-1, :].argmax(dim=-1)  #shape = [batch_size, seq_len-1]  # 取除最后一个token外的所有
+            shift_labels = labels[..., 1:]  # 忽略第一个token的标签(对应输入序列)
+            '''
+            含义：这行代码通过对 logits 进行处理获取预测的令牌。logits 是模型输出的原始分数，表示每个token的预测概率（通常是通过softmax函数获得）。这里通过[..., :-1, :]将 logits 的最后一个时间步的数据移除，因为我们想要预测的是下一个令牌。
+                argmax(dim=-1)：在最后一个维度（每个token的预测概率）中找到具有最高概率的token索引。结果 shift_preds 的形状为 [batch_size, seq_len-1]。
+            '''
+            self.right += (shift_preds == shift_labels)   # 统计预测正确的token
+            .masked_fill(shift_labels.eq(-100), 0)   # 忽略标签为-100的位置(padding/输入部分)
+            .sum().item()
+
             self.total += (shift_labels != -100).sum().item()
             self.total_loss += loss.item()
 
     def get_metric(self, reset=True):
-        dist.all_reduce(self.right, op=torch.distributed.ReduceOp.SUM)
-        dist.all_reduce(self.total, op=torch.distributed.ReduceOp.SUM)
-        dist.all_reduce(self.total_loss, op=torch.distributed.ReduceOp.SUM)
+        # 全聚合
+        dist.all_reduce(self.right, op=torch.distributed.ReduceOp.SUM)  #  聚合所有GPU的正确预测数
+        dist.all_reduce(self.total, op=torch.distributed.ReduceOp.SUM)  # 聚合所有GPU的有效token总数  
+        dist.all_reduce(self.total_loss, op=torch.distributed.ReduceOp.SUM)  # 聚合所有GPU的损失总和
 
         acc = (self.right / self.total).item()
         loss = self.total_loss.item() / (self.world_size * self.n_step)
@@ -144,18 +181,24 @@ def train(args):
     model = AutoModelForCausalLM.from_pretrained(args.model_path, trust_remote_code=True)
 
     # open gradient checkpointing
-    model.gradient_checkpointing_enable()
+    model.gradient_checkpointing_enable()  
+    
+    '''
+    核心作用：通过牺牲计算时间换取显存节省
+        默认情况下，前向传播需要保存所有中间激活值用于反向传播
+        开启后只保存部分关键激活，其余在反向传播时重新计算
+    '''
 
     no_decay = ["bias", "LayerNorm.weight"]
     optimizer_grouped_parameters = [
         {
             "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
             "weight_decay": args.weight_decay,
-        },
+        },  # # 对普通参数应用衰减
         {
             "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
             "weight_decay": 0.0,
-        },
+        },  # 对偏置和LayerNorm参数禁用衰减
     ]
 
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
@@ -172,7 +215,8 @@ def train(args):
     start_step = 0
     global_step = 0
 
-    metric = SFTMetric(device=torch.cuda.current_device())
+    metric = SFTMetric(device=torch.cuda.current_device())  # 确保指标计算发生在当前GPU设备上，通过 dist.all_reduce 实现跨GPU的指标聚合
+
 
     def save_checkpoint(epoch, step, global_step):
         save_dir = os.path.join(args.output_dir, f"checkpoint-{epoch}-{global_step}")
