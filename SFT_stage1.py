@@ -36,7 +36,7 @@ class Train_dataset(torch.utils.data.Dataset):
         print('过滤掉',len(self.data),len(newdata))
         self.data = newdata
 
-        self.max_seq_len = self.config.max_seq_len
+        self.max_seq_len = self.config.max_seq_len 
         self.debug = 0
 
         # 如果从Base LLMs训练，选择 llama3-instruct作为模版
@@ -93,7 +93,7 @@ class Train_dataset(torch.utils.data.Dataset):
 
 class SFTMetric:
     def __init__(self, device):
-        self.n_step = 0
+        self.n_step = 0  
         self.right = torch.Tensor([0]).to(device=device)
         self.total = torch.Tensor([0]).to(device=device)
         self.total_loss = torch.Tensor([0]).to(device=device)
@@ -137,7 +137,7 @@ def train(args):
     accelerator.print(f'args:\n{args}')
 
     accelerator.state.deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu'] = args.train_bsz_per_gpu
-    accelerator.state.deepspeed_plugin.deepspeed_config['train_batch_size'] = args.train_bsz_per_gpu*dist.get_world_size()*accelerator.gradient_accumulation_steps
+    accelerator.state.deepspeed_plugin.deepspeed_config['train_batch_size'] = args.train_bsz_per_gpu * dist.get_world_size() * accelerator.gradient_accumulation_steps
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
 

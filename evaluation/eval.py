@@ -9,6 +9,8 @@ from transformers import AutoTokenizer
 from jinja2 import Template
 from scorer import get_results
 
+from typing import List, Dict
+
 
 def postprocess_output(pred):
     pred = pred.replace("</s>", "")
@@ -16,7 +18,7 @@ def postprocess_output(pred):
         pred = pred[1:]
     return pred
 
-def load_file(input_fp):
+def load_file(input_fp)->List[Dict]:
     with open(input_fp, 'r') as f:
         data = json.load(f)
     input_data = []
@@ -47,7 +49,9 @@ def main():
 
     print(f"Using local API server at port {args.port}")
     client = openai.Client(
-    base_url=f"http://127.0.0.1:{args.port}/v1", api_key="EMPTY")
+        base_url=f"http://127.0.0.1:{args.port}/v1", 
+        api_key="EMPTY"
+    )
 
     if args.use_chat_template:
         tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True, padding_side='left')
