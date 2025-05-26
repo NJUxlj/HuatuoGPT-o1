@@ -7,3 +7,7 @@ xformers==0.0.28
 # vllm
 # torchvision
 retrying
+
+wandb
+flash_attn
+jinja2

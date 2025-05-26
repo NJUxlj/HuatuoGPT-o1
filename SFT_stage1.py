@@ -140,8 +140,10 @@ class SFTMetric:
             含义：这行代码通过对 logits 进行处理获取预测的令牌。logits 是模型输出的原始分数，表示每个token的预测概率（通常是通过softmax函数获得）。这里通过[..., :-1, :]将 logits 的最后一个时间步的数据移除，因为我们想要预测的是下一个令牌。
                 argmax(dim=-1)：在最后一个维度（每个token的预测概率）中找到具有最高概率的token索引。结果 shift_preds 的形状为 [batch_size, seq_len-1]。
             '''
-            self.right += (shift_preds == shift_labels)   # 统计预测正确的token
-            .masked_fill(shift_labels.eq(-100), 0)   # 忽略标签为-100的位置(padding/输入部分)
+            # # 统计预测正确的token
+            # 忽略标签为-100的位置(padding/输入部分)
+            self.right += (shift_preds == shift_labels)  \
+            .masked_fill(shift_labels.eq(-100), 0)   \
             .sum().item()
 
             self.total += (shift_labels != -100).sum().item()
@@ -221,14 +223,14 @@ def train(args):
     def save_checkpoint(epoch, step, global_step):
         save_dir = os.path.join(args.output_dir, f"checkpoint-{epoch}-{global_step}")
         if accelerator.is_main_process:
-            checkpoint_files = os.listdir(args.output_dir)
+            checkpoint_files = os.listdir(args.output_dir)   # To get a list of all files and subdirectories located directly within the directory specified by args.output_dir
             checkpoint_files = [file for file in checkpoint_files if file.startswith("checkpoint-")]
             num_checkpoints = len(checkpoint_files)
             if args.max_ckpts>0:
-                if num_checkpoints >= args.max_ckpts:
-                    checkpoint_files.sort(key=lambda x: os.path.getctime(os.path.join(args.output_dir, x)))
+                if num_checkpoints >= args.max_ckpts:  # 如果检查点数量超过最大值，删除最旧的检查点文件夹
+                    checkpoint_files.sort(key=lambda x: os.path.getctime(os.path.join(args.output_dir, x)))  # 按照检查点文件夹被创建的时间排序
                     oldest_checkpoint = checkpoint_files[0]
-                    shutil.rmtree(os.path.join(args.output_dir, oldest_checkpoint))        
+                    shutil.rmtree(os.path.join(args.output_dir, oldest_checkpoint))  #  delete an entire directory tree.  删除最旧的检查点文件夹    
             os.makedirs(save_dir, exist_ok=True)
             output_dir = os.path.join(save_dir, 'tfmr')
             if accelerator.state.deepspeed_plugin.zero_stage!=3:
@@ -249,6 +251,13 @@ def train(args):
             print(f'huggingface model save in {output_dir}, copy file:{copy_files}')
 
         if accelerator.state.deepspeed_plugin.zero_stage==3:
+            '''
+            简单来说，ZeRO Stage 3 需要 unwrap_model 是因为在这个阶段，
+            模型的参数（权重）本身是分散存储在所有参与训练的 GPU 上的，
+            没有任何一个 GPU 持有完整的模型参数。 
+            
+            而其他 ZeRO 阶段（Stage 1, Stage 2）或不使用 ZeRO 时，每个 GPU（至少是主 GPU）上仍然保留着完整的模型参数副本。
+            '''
             unwrap_model = accelerator.unwrap_model(model)
             unwrap_model.save_pretrained(os.path.join(save_dir, f'tfmr'),is_main_process=accelerator.is_main_process,save_function=accelerator.save,state_dict=accelerator.get_state_dict(model))
             
@@ -286,13 +295,17 @@ def train(args):
 
             if accelerator.is_main_process:
                 train_dataloader_iterator.set_postfix(epoch=epoch, current_step=batch_cnt, total_step=len(train_dataloader), skip=accelerator.optimizer_step_was_skipped, loss=round(train_loss, 3), acc=round(acc, 3), length=len(input_ids[0]), lr=lr_scheduler.get_last_lr()[0])
+                '''
+                .set_postfix(...): This is a method provided by tqdm (or a similar library). It allows you to dynamically add or update key-value pairs of information that are displayed at the end of the progress bar line. 
+                                    This is useful for showing metrics that change with each iteration, like loss, accuracy, learning rate, etc.
+                '''
 
             if global_step % 3 == 0 and accelerator.is_main_process:
                 wandb.log({
                     'skip': int(accelerator.optimizer_step_was_skipped),
                     'loss': train_loss,
                     'acc': acc,
-                    'lr': lr_scheduler.get_last_lr()[0]
+                    'lr': lr_scheduler.get_last_lr()[0]    # The get_last_lr() method typically returns a list of the current learning rates (one for each parameter group in the optimizer).
                 }, step=global_step)
 
         accelerator.wait_for_everyone()

@@ -151,6 +151,11 @@ accelerate launch \
 - num_processes 的值， 必须和  local_rollout_forward_batch_size 一致
 - num_mini_batches 等同于 per_device_train_batch_size
 
+- 下载奖励模型
+```
+huggingface-cli download --resume-download FreedomIntelligence/medical_o1_verifier_3B --local-dir /root/autodl-tmp/models/medical_o1_verifier_3B
+```
+
 ```
 accelerate launch \
 	--num_processes 4 \
@@ -159,11 +164,11 @@ accelerate launch \
     --config_file ./configs/deepspeed_zero3.yaml \
 	--deepspeed_multinode_launcher standard RL_stage2.py \
     --model_name_or_path /root/autodl-tmp/models/Qwen2.5-1.5B-Instruct \
-    --reward_model_path [FreedomIntelligence/medical_o1_verifier_3B] \
+    --reward_model_path /root/autodl-tmp/models/medical_o1_verifier_3B \
     --value_model_path /root/autodl-tmp/models/Qwen2.5-1.5B-Instruct \
-    --dataset_name  /root/autodl-tmp/HuatuoGPT-o1/data/medical-o1-verifiable-problem \
+    --dataset_name  /root/autodl-tmp/HuatuoGPT-o1/data/medical-o1-verifiable-problem/medical_o1_verifiable_problem.json \
     --response_length 1300 \
-    --temperature 0.5 \local_rollout_forward_batch_sizelocal_rollout_forward_batch_size
+    --temperature 0.5 \
     --local_rollout_forward_batch_size 4 \
     --num_ppo_epochs 3 \
     --num_mini_batches 1 \
