@@ -1,0 +1,15 @@
+{"time":"2025-05-26T11:16:40.216041168+08:00","level":"INFO","msg":"stream: starting","core version":"0.19.11","symlink path":"/root/autodl-tmp/HuatuoGPT-o1/wandb/offline-run-20250526_111639-3jbjwik6/logs/debug-core.log"}
+{"time":"2025-05-26T11:16:40.441208839+08:00","level":"WARN","msg":"GraphQL client is nil, skipping feature loading"}
+{"time":"2025-05-26T11:16:40.441619594+08:00","level":"INFO","msg":"created new stream","id":"3jbjwik6"}
+{"time":"2025-05-26T11:16:40.441669755+08:00","level":"INFO","msg":"stream: started","id":"3jbjwik6"}
+{"time":"2025-05-26T11:16:40.441701292+08:00","level":"INFO","msg":"writer: Do: started","stream_id":"3jbjwik6"}
+{"time":"2025-05-26T11:16:40.441822151+08:00","level":"INFO","msg":"sender: started","stream_id":"3jbjwik6"}
+{"time":"2025-05-26T11:16:40.442025355+08:00","level":"INFO","msg":"handler: started","stream_id":"3jbjwik6"}
+{"time":"2025-05-26T11:16:40.449245221+08:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-05-26T11:20:11.67938662+08:00","level":"INFO","msg":"stream: closing","id":"3jbjwik6"}
+{"time":"2025-05-26T11:20:11.679454375+08:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-05-26T11:20:11.679512565+08:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-05-26T11:20:11.679880729+08:00","level":"INFO","msg":"handler: closed","stream_id":"3jbjwik6"}
+{"time":"2025-05-26T11:20:11.679922109+08:00","level":"INFO","msg":"writer: Close: closed","stream_id":"3jbjwik6"}
+{"time":"2025-05-26T11:20:11.679967664+08:00","level":"INFO","msg":"sender: closed","stream_id":"3jbjwik6"}
+{"time":"2025-05-26T11:20:11.680016354+08:00","level":"INFO","msg":"stream: closed","id":"3jbjwik6"}

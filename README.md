@@ -158,7 +158,7 @@ huggingface-cli download --resume-download FreedomIntelligence/medical_o1_verifi
 
 ```
 accelerate launch \
-	--num_processes 4 \
+	--num_processes 6 \
 	--num_machines 1 \
 	--machine_rank 0 \
     --config_file ./configs/deepspeed_zero3.yaml \
@@ -169,7 +169,7 @@ accelerate launch \
     --dataset_name  /root/autodl-tmp/HuatuoGPT-o1/data/medical-o1-verifiable-problem/medical_o1_verifiable_problem.json \
     --response_length 1300 \
     --temperature 0.5 \
-    --local_rollout_forward_batch_size 4 \
+    --local_rollout_forward_batch_size 6 \
     --num_ppo_epochs 3 \
     --num_mini_batches 1 \
     --total_episodes 20000 \
