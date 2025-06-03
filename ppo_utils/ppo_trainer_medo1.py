@@ -733,6 +733,7 @@ class PPOTrainer(Trainer):
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
+                # 将一整个 batch中的 index 打乱
                 b_inds = np.random.permutation(args.local_batch_size)
                 minibatch_idx = 0
                 for mini_batch_start in range(0, args.local_batch_size, args.local_mini_batch_size):
@@ -750,22 +751,37 @@ class PPOTrainer(Trainer):
                             mb_return = returns[micro_batch_inds]
                             mb_values = values[micro_batch_inds]
 
+                            # forward函数返回两个值:
+                            # 1. output: 包含模型输出的完整信息
+                            # 2. vpred_temp: 价值网络预测的原始价值,包含整个序列(包括context)的价值预测 【这里使用 policy model 来生成价值，之前的价值 values 是使用 ref model 生成的】
                             output, vpred_temp = forward(model, mb_query_responses, processing_class.pad_token_id)
+                            
+                            # 获取response部分的logits并应用temperature缩放
                             logits = output.logits[:, context_length - 1 : -1]
                             logits /= args.temperature + 1e-7
+                            
+                            # 计算新的策略分布
                             new_all_logprobs = F.log_softmax(logits, dim=-1)
-                            new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)
+                            new_logprobs = torch.gather(new_all_logprobs, 2, mb_responses.unsqueeze(-1)).squeeze(-1)   # shape = (batch_size, seq_len)
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
+                            
+                            # 由于 value model 是基于前n-1个token来预测第n个token的价值，
+                            #    所以我们并不需要提取最后一个 token 对应的价值分数（因为这个分数（如果有的话）对应的是第 n+1 个 token的价值（n 是序列长度））
+                                    # 因此我们需要使用 vpred_temp[:, context_length - 1 : -1]
+                            # 从vpred_temp中提取response部分的价值预测
+                            # vpred_temp包含整个序列的价值,我们只需要response部分
                             vpred = vpred_temp[:, context_length - 1 : -1].squeeze(-1)
                             vpred = torch.masked_fill(vpred, padding_mask_p1[micro_batch_inds], 0)
+                            
+                            # 对价值预测进行裁剪,防止与旧价值差异过大
                             vpredclipped = torch.clamp(
                                 vpred,
                                 mb_values - args.cliprange_value,
                                 mb_values + args.cliprange_value,
                             )
-                            vf_losses1 = torch.square(vpred - mb_return)
+                            vf_losses1 = torch.square(vpred - mb_return)  # shape = (batch_size, seq_len)
                             vf_losses2 = torch.square(vpredclipped - mb_return)
                             vf_loss_max = torch.max(vf_losses1, vf_losses2)
                             vf_loss = 0.5 * masked_mean(vf_loss_max, ~padding_mask_p1[micro_batch_inds])
@@ -773,7 +789,7 @@ class PPOTrainer(Trainer):
                                 (vf_losses2 > vf_losses1).float(), ~padding_mask_p1[micro_batch_inds]
                             )
                             logprobs_diff = new_logprobs - mb_logprobs
-                            ratio = torch.exp(logprobs_diff)
+                            ratio = torch.exp(logprobs_diff)  # shape = (batch_size, seq_len)
                             pg_losses = -mb_advantage * ratio
                             pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
                             pg_loss_max = torch.max(pg_losses, pg_losses2)
@@ -783,12 +799,31 @@ class PPOTrainer(Trainer):
                             optimizer.step()
                             optimizer.zero_grad()
                             with torch.no_grad():
+                                # 计算策略梯度裁剪比例 - 统计有多少比例的样本被裁剪了
                                 pg_clipfrac = masked_mean(
                                     (pg_losses2 > pg_losses).float(), ~padding_mask[micro_batch_inds]
                                 )
-                                prob_dist = torch.nn.functional.softmax(logits, dim=-1)
+                                
+                                # 计算策略分布的概率分布
+                                prob_dist = torch.nn.functional.softmax(logits, dim=-1)  # shape = (batch_size, seq_len, vocab_size)
+                                
+                                # 计算策略的熵 - 用于衡量策略的随机性/不确定性
+                                # 两种等价的熵计算公式:
+                                # 1. 标准形式: H = -sum(p * log(p))
+                                # 2. 数值稳定形式: H = log(sum(exp(logits))) - sum(p * logits)
+                                # 证明:
+                                # p = softmax(logits) = exp(logits) / sum(exp(logits))
+                                # log(p) = logits - log(sum(exp(logits)))
+                                # H = -sum(p * log(p))
+                                #   = -sum(p * (logits - log(sum(exp(logits)))))
+                                #   = -sum(p * logits) + log(sum(exp(logits))) * sum(p)
+                                #   = log(sum(exp(logits))) - sum(p * logits)
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
+                                
+                                # 计算近似的KL散度 - 用于衡量新旧策略的差异
                                 approxkl = 0.5 * (logprobs_diff**2).mean()
+                                
+                                # 记录各种统计指标
                                 approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
                                 pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
                                     pg_clipfrac
@@ -800,8 +835,8 @@ class PPOTrainer(Trainer):
                                 )
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ratio.mean()
-                        gradient_accumulation_idx += 1
-                    minibatch_idx += 1
+                        gradient_accumulation_idx += 1   # micro batch 计数
+                    minibatch_idx += 1   # mini batch 计数
                     # del everything and empty cache
                     # fmt: off
                     del (
