@@ -688,12 +688,27 @@ class PPOTrainer(Trainer):
                 3. 这对于后续计算优势函数(advantage)和回报(return)是必要的
                 '''
 
-                # 4. compute rewards
-                kl = logprobs - ref_logprobs
+                # 4. 计算奖励值
+                # 计算新旧策略的KL散度: log(π_new/π_old) = log(π_new) - log(π_old)
+                kl = logprobs - ref_logprobs  
+                
+                # 将KL散度转换为非分数奖励,负号表示我们希望减少KL散度
+                # kl_coef是控制KL惩罚强度的系数
                 non_score_reward = -args.kl_coef * kl
+                
+                # 复制非分数奖励作为基础奖励
                 rewards = non_score_reward.clone()
+                
+                # 获取每个序列的起始索引(0到batch_size-1)
                 actual_start = torch.arange(rewards.size(0), device=rewards.device)
+                
+                # 计算每个序列的实际结束位置
+                # 如果sequence_lengths_p1小于rewards的序列长度,使用sequence_lengths_p1
+                # 否则使用sequence_lengths
                 actual_end = torch.where(sequence_lengths_p1 < rewards.size(1), sequence_lengths_p1, sequence_lengths)
+                
+                # 在序列的起始和结束位置加上额外的分数奖励
+                # 这通常用于鼓励模型生成更合理的序列
                 rewards[[actual_start, actual_end]] += scores
 
                 # 5. whiten rewards
