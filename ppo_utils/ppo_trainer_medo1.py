@@ -536,7 +536,7 @@ class PPOTrainer(Trainer):
                     sub_answer = allanswer[i : i + args.local_rollout_forward_batch_size]
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     # 提取模型生成的响应部分(去掉输入上下文)
-                    response = query_response[:, context_length:]
+                    response = query_response[:, context_length:]   # shape = (batch_size, seq_len)
                     # 获取当前批次的logits
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
                     # 计算log概率分布
@@ -602,7 +602,7 @@ class PPOTrainer(Trainer):
                     logprobs.append(logprob)
                     ref_logprobs.append(ref_logprob)
                     sequence_lengths.append(sequence_length)
-                    scores.append(score)
+                    scores.append(score)  # 奖励
                     values.append(value)
                 responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
@@ -617,19 +617,76 @@ class PPOTrainer(Trainer):
 
                 # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
                 # Completions not passing that filter will receive a lower score.
-                contain_eos_token = torch.any(postprocessed_responses == self.processing_class.eos_token_id, dim=-1)
+                # 检查每个序列是否包含结束标记(EOS token)
+                # torch.any()在最后一个维度上检查是否存在EOS token
+                # 返回一个布尔张量,表示每个序列是否包含EOS token
+                contain_eos_token = torch.any(postprocessed_responses == self.processing_class.eos_token_id, dim=-1) # shape = (batch_size,)
+                
+                # 如果设置了缺失EOS token的惩罚值
                 if self.args.missing_eos_penalty is not None:
+                    # 对不包含EOS token的序列进行惩罚
+                    # ~contain_eos_token 选择不包含EOS token的序列
+                    # 从这些序列的分数中减去惩罚值
                     scores[~contain_eos_token] -= self.args.missing_eos_penalty
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
+                
+                # 创建一个索引矩阵，用于标记每个序列中的位置
+                # responses.shape[1]是序列长度，responses.shape[0]是批次大小
+                # 例如，如果序列长度为5，批次大小为2，则response_idxs为:
+                # [[0,1,2,3,4],
+                #  [0,1,2,3,4]]
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
+                
+                # 创建padding mask，用于标记超出实际序列长度的位置
+                # sequence_lengths.unsqueeze(1)将序列长度扩展为列向量
+                # 例如，如果sequence_lengths为[3,4]，则padding_mask为:
+                # [[False,False,False,True,True],
+                #  [False,False,False,False,True]]
                 padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
+                
+                # 将padding位置的logprobs和ref_logprobs设置为INVALID_LOGPROB
+                # 这样可以确保这些位置不会参与后续的计算
                 logprobs = torch.masked_fill(logprobs, padding_mask, INVALID_LOGPROB)
                 ref_logprobs = torch.masked_fill(ref_logprobs, padding_mask, INVALID_LOGPROB)
+                
+                # 序列长度加1，用于计算value的padding mask
+                # 因为value是预测下一个token的价值，所以需要多一个位置
                 sequence_lengths_p1 = sequence_lengths + 1
+                
+                # 创建value的padding mask
+                # 与logprobs的mask类似，但多了一个位置
                 padding_mask_p1 = response_idxs > (sequence_lengths_p1.unsqueeze(1))
+                
+                # 将padding位置的value设置为0
+                # 这样可以确保这些位置不会影响优势函数的计算
                 values = torch.masked_fill(values, padding_mask_p1, 0)
+
+
+                '''
+                让我详细解释一下为什么需要 `response_idxs > (sequence_lengths_p1.unsqueeze(1))`：
+
+                在PPO训练中，value网络预测的是每个位置的下一个token的价值。这意味着对于长度为n的序列，我们需要n+1个value值：
+                - 前n个value值对应序列中每个位置的下一个token的价值
+                - 最后一个value值对应序列结束后的价值（通常为0）
+
+                举个例子：
+                假设我们有一个序列长度为3的样本，那么：
+                - `sequence_lengths = 3`
+                - `sequence_lengths_p1 = 4` (因为需要多一个位置)
+                - `response_idxs` 可能是 `[[0,1,2,3,4], [0,1,2,3,4]]` (假设最大长度为5)
+                - `sequence_lengths_p1.unsqueeze(1)` 变成 `[[4], [4]]`
+
+                当执行 `response_idxs > (sequence_lengths_p1.unsqueeze(1))` 时：
+                - 对于第一个样本，会得到 `[False,False,False,False,True]`
+                - 这表示前4个位置是有效的value值，第5个位置是padding
+
+                这样做的原因是：
+                1. 我们需要确保value预测覆盖到序列结束后的位置
+                2. 同时要屏蔽掉超出实际需要的padding位置
+                3. 这对于后续计算优势函数(advantage)和回报(return)是必要的
+                '''
 
                 # 4. compute rewards
                 kl = logprobs - ref_logprobs
