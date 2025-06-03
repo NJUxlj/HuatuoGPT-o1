@@ -126,11 +126,13 @@ def process_single_item(item, gpt_instance, save_directory, filter_prompt, refor
 
 def merge_saved_files(directory):
     '''
-    合并后的数据格式是一个包含多个JSON对象的列表，每个对象具有以下结构之一：
-
+    合并后的数据格式是一个包含多个JSON对象的列表，每个对象具有以下结构：
+        1. 包含 process_id 字段
+        1. 包含 question， options_str, answer 字段
         1. 包含 Open-ended Verifiable Question 和 Ground-True Answer 字段
-        2. 包含 gpt_filter_response 字段
-        3. 包含 gpt4_response_filter 字段
+        2. 包含 gpt_reformat_query 字段
+        2. 包含 gpt_filter_query 字段
+        3. 包含 gpt4_filter_response 字段
     '''
     _, _, filenames = next(os.walk(directory))  # 用于遍历指定的目录，返回一个生成器，包含 (root, dirs, files) 三元组
     json_files = [f for f in filenames if f.endswith('.json')]
@@ -159,7 +161,7 @@ def main():
         input_data = json.load(file)
 
     # Assign unique process IDs to each item
-    for idx, item in enumerate(input_data, start=1):
+    for idx, item in enumerate(input_data, start=1):  # 索引应该从 1 开始计数，而不是默认的 0。
         item['process_id'] = idx
 
     if args.limit_num:
@@ -172,7 +174,7 @@ def main():
     save_directory = os.path.join('output_data', task_name)
     os.makedirs(save_directory, exist_ok=True)
 
-    gpt_instance = GPT(model_name=model_name, api_url=url, api_key=api_key)
+    gpt_instance = GPT(model_name=model_name, api_url=llm_url, api_key=api_key)
 
     filter_prompt = """<Multiple-choice Question>
 {}

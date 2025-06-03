@@ -1,0 +1,15 @@
+{"time":"2025-05-26T11:40:38.675406214+08:00","level":"INFO","msg":"stream: starting","core version":"0.19.11","symlink path":"/root/autodl-tmp/HuatuoGPT-o1/wandb/offline-run-20250526_114038-lmk3mz2x/logs/debug-core.log"}
+{"time":"2025-05-26T11:40:38.894208838+08:00","level":"WARN","msg":"GraphQL client is nil, skipping feature loading"}
+{"time":"2025-05-26T11:40:38.894431606+08:00","level":"INFO","msg":"created new stream","id":"lmk3mz2x"}
+{"time":"2025-05-26T11:40:38.894471047+08:00","level":"INFO","msg":"stream: started","id":"lmk3mz2x"}
+{"time":"2025-05-26T11:40:38.894515128+08:00","level":"INFO","msg":"writer: Do: started","stream_id":"lmk3mz2x"}
+{"time":"2025-05-26T11:40:38.894596297+08:00","level":"INFO","msg":"sender: started","stream_id":"lmk3mz2x"}
+{"time":"2025-05-26T11:40:38.894734097+08:00","level":"INFO","msg":"handler: started","stream_id":"lmk3mz2x"}
+{"time":"2025-05-26T11:40:38.904916877+08:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-05-26T12:01:06.346202319+08:00","level":"INFO","msg":"stream: closing","id":"lmk3mz2x"}
+{"time":"2025-05-26T12:01:06.346274894+08:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-05-26T12:01:06.346432383+08:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-05-26T12:01:06.346649775+08:00","level":"INFO","msg":"handler: closed","stream_id":"lmk3mz2x"}
+{"time":"2025-05-26T12:01:06.346671055+08:00","level":"INFO","msg":"sender: closed","stream_id":"lmk3mz2x"}
+{"time":"2025-05-26T12:01:06.34666815+08:00","level":"INFO","msg":"writer: Close: closed","stream_id":"lmk3mz2x"}
+{"time":"2025-05-26T12:01:06.346874279+08:00","level":"INFO","msg":"stream: closed","id":"lmk3mz2x"}

@@ -167,7 +167,7 @@ accelerate launch \
     --reward_model_path /root/autodl-tmp/models/medical_o1_verifier_3B \
     --value_model_path /root/autodl-tmp/models/Qwen2.5-1.5B-Instruct \
     --dataset_name  /root/autodl-tmp/HuatuoGPT-o1/data/medical-o1-verifiable-problem/medical_o1_verifiable_problem.json \
-    --response_length 1300 \
+    --response_length 512 \
     --temperature 0.5 \
     --local_rollout_forward_batch_size 6 \
     --num_ppo_epochs 3 \

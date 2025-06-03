@@ -15,6 +15,8 @@
 import gc
 import math
 import os
+# textwrap 是 Python 标准库中的一个模块，用于文本包装和填充
+# 主要用于格式化文本，比如自动换行、缩进等文本处理功能
 import textwrap
 import time
 from collections import defaultdict
@@ -85,6 +87,15 @@ def get_reward_o1(
     model, response_ids, tokenizer, reward_tokenizer, pad_token_id, sub_answer,max_length = 4000
 
 ) -> Tuple[torch.Tensor]:
+    '''
+    :response_ids:  K 个 模型预测的答案 【以 token_id的形式】
+
+    :sub_answer:  K 个 参考答案
+
+    :max_length: 最大长度
+
+    :return:  K 个 奖励值
+    '''
 
     tmp = """<Model Response>
 {}
@@ -99,7 +110,7 @@ Your task is to evaluate the model response by comparing it to the reference ans
     output_pattern = r"## Final Response\n\n(.*)"
     processed_batch = []
     output_matches = []
-    for i in range(len(sub_answer)):
+    for i in range(len(sub_answer)):  # 遍历每一对 模型预测 和 参考答案
         response = tokenizer.decode(response_ids[i], skip_special_tokens=True)
 
         count_en = response.count('## Final Response\n\n')
@@ -124,15 +135,15 @@ Your task is to evaluate the model response by comparing it to the reference ans
     
     with torch.no_grad():
         logits = model(**input_batch,return_dict=True).logits
-        probabilities = F.softmax(logits, dim=-1)
+        probabilities = F.softmax(logits, dim=-1) 
         rewards = probabilities[:, 1] * 10
 
         rewards_list = []
-        for i in range(len(sub_answer)):
+        for i in range(len(sub_answer)):   # 遍历每个参考答案
             if output_matches[i] is None:
                 rewards_list.append(0.0)
             else:
-                p = probabilities[i, 1].item()
+                p = probabilities[i, 1].item()  
                 if p > 0.4:
                     rewards_list.append(1.0)
                 else:
@@ -386,12 +397,16 @@ class PPOTrainer(Trainer):
     @contextmanager
     def null_ref_context(self):
         """Context manager for handling null reference model (that is, peft adapter manipulation)."""
+        # 如果模型是PEFT模型且没有指定ref_adapter_name,则禁用adapter
+        # 否则使用nullcontext()(即不执行任何操作)
         with self.accelerator.unwrap_model(
             self.model.policy
         ).disable_adapter() if self.is_peft_model and not self.ref_adapter_name else nullcontext():
+            # 如果指定了ref_adapter_name,则切换到该adapter
             if self.ref_adapter_name:
                 self.model.policy.set_adapter(self.ref_adapter_name)
             yield
+            # 在上下文结束后,如果之前切换了adapter,则切换回默认adapter
             if self.ref_adapter_name:
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
@@ -406,6 +421,9 @@ class PPOTrainer(Trainer):
 
     def _save(self, output_dir: Optional[str] = None, state_dict=None):
         if self.is_deepspeed_enabled:
+            # 在DeepSpeed模式下,模型权重名称会带有'policy.'前缀
+            # 这是因为在DeepSpeed中,模型被包装成了policy属性
+            # 保存时需要去掉这个前缀,以保持权重名称的一致性
             state_dict = {name.removeprefix('policy.'): param for name, param in state_dict.items()
                           if name.startswith('policy.')}
 
@@ -437,7 +455,20 @@ class PPOTrainer(Trainer):
 
         accelerator.print("===training policy===")
         start_time = time.time()
+        # 定义统计数据的形状,包含三个维度:
+        # 1. PPO训练轮数(num_ppo_epochs)
+        # 2. 每轮中的mini-batch数量(num_mini_batches) 
+        # 3. 梯度累积步数(gradient_accumulation_steps)
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
+        
+        # 初始化各种统计指标的张量:
+        # approxkl_stats: 近似KL散度统计,用于监控新旧策略的差异
+        # pg_clipfrac_stats: 策略梯度裁剪比例统计,记录被裁剪的更新比例
+        # pg_loss_stats: 策略梯度损失统计
+        # vf_loss_stats: 价值函数损失统计
+        # vf_clipfrac_stats: 价值函数裁剪比例统计
+        # entropy_stats: 策略熵统计,用于监控探索程度
+        # ratio_stats: 新旧策略概率比统计
         approxkl_stats = torch.zeros(stats_shape, device=device)
         pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
@@ -477,47 +508,61 @@ class PPOTrainer(Trainer):
 
         for update in range(1, args.num_total_batches + 1):
             self.state.episode += 1 * args.batch_size
-            data = next(iter_dataloader)
+            data = next(iter_dataloader)  # 获取一个 batch
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
                 allanswer = data["answer"] 
                 context_length = queries.shape[1]
                 responses = []
                 postprocessed_responses = []
-                logprobs = []
-                ref_logprobs = []
-                scores = []
-                sequence_lengths = []
+                logprobs = []  # pi(a|s)
+                ref_logprobs = []  # pi_ref(a|s)
+                scores = []  
+                sequence_lengths = []  # 每个样本的实际长度
                 values = []
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                     query_responses, logitss = batch_generation(
                         unwrapped_model.policy,
                         queries,
-                        args.local_rollout_forward_batch_size,
+                        args.local_rollout_forward_batch_size,  
                         processing_class.pad_token_id,
                         generation_config,
                     )
 
+                # 按批次大小遍历所有查询
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
+                    # 获取当前批次的查询、答案和模型响应
                     query = queries[i : i + args.local_rollout_forward_batch_size]
                     sub_answer = allanswer[i : i + args.local_rollout_forward_batch_size]
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
+                    # 提取模型生成的响应部分(去掉输入上下文)
                     response = query_response[:, context_length:]
+                    # 获取当前批次的logits
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
+                    # 计算log概率分布
                     all_logprob = F.log_softmax(logits, dim=-1)
+                    # 提取实际生成token的log概率
                     logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    # 清理内存
                     del logits, all_logprob
                     torch.cuda.empty_cache()
 
+                    # 计算参考策略的log概率
                     if ref_policy is None:
+                        # 如果没有参考策略,使用null上下文
                         with self.null_ref_context():
                             ref_output = forward(model.policy, query_response, processing_class.pad_token_id)
                     else:
+                        # 使用参考策略计算
                         ref_output = forward(ref_policy, query_response, processing_class.pad_token_id)
+                    # 提取参考策略的logits并应用温度缩放
                     ref_logits = ref_output.logits[:, context_length - 1 : -1]
                     ref_logits /= args.temperature + 1e-7
+                    # 计算参考策略的log概率分布
                     ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                    # 提取实际生成token的参考log概率
                     ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    # 清理内存
                     del ref_output, ref_logits, ref_all_logprob
                     torch.cuda.empty_cache()
 
@@ -530,15 +575,27 @@ class PPOTrainer(Trainer):
 
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                    # 计算每个序列的实际长度(不包括padding部分)
+                    # first_true_indices返回每个序列中第一个pad_token_id的位置,减1得到实际长度
                     sequence_length = first_true_indices(postprocessed_response == processing_class.pad_token_id) - 1
+                    
+                    # 从模型中提取value_model部分用于计算价值
+                    # accelerator.unwrap_model用于获取原始模型(去掉分布式训练包装)
                     unwrapped_value_model = accelerator.unwrap_model(model).value_model
+                    
+                    # 使用value_model计算每个token的价值
+                    # context_length用于区分输入和生成部分
                     full_value, _, _ = get_reward(
                         unwrapped_value_model, query_response, processing_class.pad_token_id, context_length
                     )
-                    value = full_value[:, context_length - 1 : -1].squeeze(-1)
+                    # 使用 context_length - 1 : -1 的原因:
+                    # 1. context_length - 1: 从输入序列的最后一个token开始,因为value_model需要基于前一个token预测当前token的价值
+                    # 2. -1: 去掉最后一个token,因为最后一个token没有下一个token可以预测
+                    # 这样确保value的预测与生成序列的每个token一一对应
+                    value = full_value[:, context_length - 1 : -1].squeeze(-1) # shape = (batch_size, seq_len)
                     score = get_reward_o1(
                         reward_model, postprocessed_response, processing_class, self.reward_processing_class, processing_class.pad_token_id, sub_answer
-                    )
+                    )  # shape = (batch_size, 1)
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
@@ -744,10 +801,15 @@ class PPOTrainer(Trainer):
             )
             torch.cuda.empty_cache()
 
-        # HF trainer specifics
+        # 在训练结束时调用回调处理器的on_train_end方法
+        # 这个方法会处理训练结束时的各种清理和收尾工作
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
+        
+        # 如果控制标志指示需要保存模型
         if self.control.should_save:
+            # 保存模型检查点,不包含trial和metrics信息
             self._save_checkpoint(model, trial=None, metrics=None)
+            # 调用回调处理器的on_save方法处理保存后的操作
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
